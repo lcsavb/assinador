@@ -378,3 +378,38 @@ pre-allocates so the push loop never reallocates.
 Debug`). The compiler printed the exact `#[derive(Debug)]` to add and where. Same
 pattern as Task 5 — internalize it: **test ergonomics (`unwrap`, `assert_eq`)
 often dictate which derives your types need.**
+
+---
+
+## Task 8 — Signing dispatcher
+
+### Trait objects: `dyn Trait`
+`Arc<dyn DocumentSigningPort>` stores a value whose concrete type is **erased** —
+we know only that it implements the trait. This enables **dynamic dispatch**: a
+hidden vtable pointer routes `.sign_documents()` to the actual implementation at
+runtime. So `get_signer("vidaas")` can hand back *any* signer behind the trait.
+
+### Static vs dynamic dispatch
+- **Static** (e.g. `Self::prepare_document`, generics `<T: Trait>`): the compiler
+  knows the exact type and inlines the call. Zero runtime cost, larger binary.
+- **Dynamic** (`dyn Trait`): one indirection through a vtable; type chosen at
+  runtime. Tiny cost, but flexible — needed when the set of types isn't known at
+  the call site. The dispatcher *is* that "choose at runtime" point.
+
+### Why `Arc<dyn ...>` and not `Box<dyn ...>`
+`Box<dyn T>` = single owner on the heap. `Arc<dyn T>` = shared owner. We use `Arc`
+because the same signer may be referenced from multiple places (dispatcher,
+callers) and across threads.
+
+### Returning a borrow: `-> Result<&Arc<dyn ...>, E>`
+`get_signer` returns a **reference** into the dispatcher (`&self.vidaas`), not a
+clone. The caller borrows it for as long as the dispatcher lives. Cheap, and the
+borrow checker guarantees the dispatcher outlives the returned reference.
+
+### Tuple struct + testing via a stub
+`struct StubSigner(&'static str);` is a **tuple struct** — fields by position, not
+name; accessed as `self.0`. In the test we implement the trait for this fake,
+returning canned data. This is the real payoff of trait-based design: we test the
+dispatcher with zero network, zero VIDaaS — just a stand-in that satisfies the
+contract. Note `match` used as an assertion: an unexpected arm calls `panic!` to
+fail the test (we can't `unwrap_err` here because `&Arc<dyn Trait>` isn't `Debug`).

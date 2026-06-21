@@ -3,12 +3,14 @@
 pub mod adapter;
 pub mod client;
 pub mod config;
+pub mod dispatcher;
 pub mod error;
 pub mod pkce;
 pub mod port;
 
 pub use adapter::VidaasSigningAdapter;
 pub use client::VidaasClient;
+pub use dispatcher::SigningDispatcher;
 pub use config::VidaasConfig;
 pub use error::SigningError;
 pub use pkce::generate_code_verifier;
