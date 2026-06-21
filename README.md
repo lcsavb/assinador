@@ -148,6 +148,20 @@ Obrigatório **uma única vez** por ambiente, para obter `client_id`/`client_sec
 - `redirect_uris` — URIs de redirecionamento; para o fluxo push use `push://`
 - `email` — e-mail de suporte
 
+Exemplo (homologação):
+
+```bash
+curl -X POST https://hml-certificado.vidaas.com.br/v0/oauth/application \
+  -H 'Content-Type: application/json' \
+  -H 'Accept: application/json' \
+  -d '{
+    "name": "assinador",
+    "comments": "Microserviço de assinatura de PDFs via VIDaaS",
+    "redirect_uris": ["push://"],
+    "email": "voce@exemplo.com"
+  }'
+```
+
 Resposta:
 
 ```json
@@ -156,6 +170,9 @@ Resposta:
 
 > ⚠️ `client_id`/`client_secret` são credenciais: **nunca** comite no repositório.
 > Use variáveis de ambiente ou um `.env` local (já ignorado pelo git).
+
+📚 Documentação oficial do Valid PSC:
+[Manual de Integração com VIDaaS — Certificado em Nuvem](https://valid-sa.atlassian.net/wiki/spaces/PDD/pages/958365697/Manual+de+Integra+o+com+VIDaaS+-+Certificado+em+Nuvem).
 
 ---
 
