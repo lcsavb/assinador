@@ -58,6 +58,10 @@ cargo run -p assinador-server
 
 ### 3. Rode o script Python para assinar
 
+> ⚠️ **O CPF precisa estar obrigatoriamente vinculado a um certificado VIDaaS
+> (Certificado em Nuvem) ativo.** Sem um certificado VIDaaS associado àquele CPF,
+> o push não chega e a assinatura não funciona.
+
 Salve como `assinar.py`, ajuste `CPF` e `PDF`, e rode `python3 assinar.py`.
 Quando ele disparar o push, **aprove no app VIDaaS do seu celular**.
 
