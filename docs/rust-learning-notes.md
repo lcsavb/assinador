@@ -529,3 +529,50 @@ The integration test binds `127.0.0.1:0` (port 0 = "OS, pick a free port"),
 reads the chosen port from `local_addr()`, `tokio::spawn`s the server as a
 background task, and hits it with a real `reqwest` client. Fully real HTTP,
 self-contained, parallel-safe (every test gets its own port).
+
+---
+
+## Task 11 — Auth endpoints (start / poll / exchange) + sign
+
+### Boundary DTOs vs library types
+Each endpoint defines its own request/response structs (`StartRequest`,
+`StartResponse`, …). These are the **JSON wire contract**, deliberately separate
+from the library's `PushAuthorization`/`AccessToken`. The HTTP edge owns its
+format; if the library's internal types change, the wire contract needn't. We
+translate between them by hand in each handler (`auth.code` → `StartResponse.code`).
+
+### Destructuring extractors in the parameter list
+```rust
+async fn auth_start(
+    State(state): State<AppState>,   // pull AppState out of the State wrapper
+    Json(req): Json<StartRequest>,   // parse+destructure the JSON body
+) -> Result<Json<StartResponse>, ApiError>
+```
+`State(state)` and `Json(req)` are **patterns** in the parameter position — axum
+gives you `State<AppState>`, the pattern unwraps it to `state`. Ordering matters
+in axum: body-consuming extractors like `Json<T>` must come **last**. `Query(q):
+Query<PollQuery>` does the same for the `?code=...` query string.
+
+### Function-as-value error mapping
+`.map_err(ApiError::from_signing)` passes the function `from_signing` directly —
+no closure needed, because its signature `fn(SigningError) -> ApiError` is exactly
+what `map_err` wants. (Compare the `sign` handler, which needs a closure
+`|e| ApiError::bad_request(format!(...))` because it adds context.)
+
+### `match` producing a value, used inline
+```rust
+let status = match state.signer.poll(&q.code).await.map_err(...)? {
+    Approval::Approved => "approved",
+    Approval::Pending  => "pending",
+};
+```
+The whole `match` evaluates to the `&'static str` we store in `status`. We `?`
+the `Result` first (propagating errors as `ApiError`), then match the `Approval`.
+
+### Consuming iterator with `into_iter().map().collect()`
+In `sign`, `signed.into_iter().map(|s| SignDocOut { ... }).collect()` consumes the
+`Vec<SignedDocument>` and builds a `Vec<SignDocOut>`, base64-encoding bytes on the
+way out. `into_iter` (not `iter`) because we own `signed` and can move each `s`.
+The decode loop uses a plain `for d in req.documents` (also consuming) so it can
+move `d.id`/`d.alias` into `UnsignedDocument` and `?`-propagate a decode error as
+a 400 per document.
