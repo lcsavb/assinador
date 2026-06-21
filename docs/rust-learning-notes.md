@@ -413,3 +413,52 @@ returning canned data. This is the real payoff of trait-based design: we test th
 dispatcher with zero network, zero VIDaaS — just a stand-in that satisfies the
 contract. Note `match` used as an assertion: an unexpected arm calls `panic!` to
 fail the test (we can't `unwrap_err` here because `&Arc<dyn Trait>` isn't `Debug`).
+
+---
+
+## Task 9 — `VidaasSigner` facade (the full flow)
+
+### Composition over inheritance
+`VidaasSigner` *has-a* `Arc<VidaasClient>` and *has-a* `VidaasSigningAdapter`
+(which holds a `.clone()` of the same `Arc`, so both share one client). Rust has
+no class inheritance — you build bigger behavior by **composing** smaller pieces
+and delegating to them. This is the recommended design everywhere in Rust.
+
+### A small enum as a return type
+`pub enum Approval { Pending, Approved }` — instead of returning a bare `bool` or
+a raw HTTP status, we return a self-documenting type. Callers `match` on it and
+the meaning is obvious. Cheap to define, much clearer API.
+
+### Delegation impl
+```rust
+#[async_trait]
+impl DocumentSigningPort for VidaasSigner {
+    async fn sign_documents(&self, token, docs) -> ... {
+        self.adapter.sign_documents(token, docs).await   // just forward
+    }
+}
+```
+The signer *is-a* `DocumentSigningPort` (so it slots into the dispatcher and any
+trait-based caller), but the actual work lives in the adapter. Thin forwarding
+wrappers like this are idiomatic and keep responsibilities separated.
+
+### The faithful exchange (the sanity-check point)
+`exchange(code, verifier)` passes the **original push `code`** — not the
+`authorizationToken` from polling. The `full_flow_begin_poll_exchange` test wires
+all four mocked endpoints and proves the orchestration end-to-end: begin → poll
+(approved) → exchange → token. This is the whole crate working together with zero
+real network.
+
+### `matches!` as a boolean assertion
+`assert!(matches!(signer.poll(..).await.unwrap(), Approval::Pending))` — checks
+the *variant* without caring about contents, inline in an `assert!`. Handy when
+the enum variant carries no data you need to inspect.
+
+---
+
+## Part 1 complete
+
+The `assinador` library crate is done: config, errors, PKCE, the low-level
+`VidaasClient`, the `DocumentSigningPort` trait + adapter + dispatcher, and the
+`VidaasSigner` facade — **18 tests, all green, zero clippy warnings.** Next:
+Part 2 wraps this in an axum HTTP microservice.

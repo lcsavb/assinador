@@ -7,6 +7,7 @@ pub mod dispatcher;
 pub mod error;
 pub mod pkce;
 pub mod port;
+pub mod signer;
 
 pub use adapter::VidaasSigningAdapter;
 pub use client::VidaasClient;
@@ -15,3 +16,4 @@ pub use config::VidaasConfig;
 pub use error::SigningError;
 pub use pkce::generate_code_verifier;
 pub use port::{DocumentSigningError, DocumentSigningPort, SignedDocument, UnsignedDocument};
+pub use signer::{AccessToken, Approval, PushAuthorization, VidaasSigner};
