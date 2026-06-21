@@ -174,3 +174,56 @@ shape and helps deserialization clarity even though we never read it.
 `Mock::given(method("POST")).and(path("/...")).respond_with(...)` to script
 responses, point our client's `base_url` at `server.uri()`, and assert on real
 HTTP round-trips — no network, fully deterministic.
+
+---
+
+## Task 4 — Push authorization + polling
+
+### `Option<T>` — Rust's type-safe "nullable"
+A value is either `Some(x)` or `None`; **there is no `null`**. `authorization_token:
+Option<String>` is absent (`None`) until the user approves, then `Some("tok")`.
+The compiler forces you to handle the `None` case, so "forgot to null-check"
+bugs don't compile. Helpers: `.is_none()`, `.as_deref()` (turns
+`Option<String>` into `Option<&str>` for easy comparison with `Some("tok")`).
+
+### serde field renaming
+VIDaaS sends camelCase (`authorizationToken`); Rust convention is snake_case
+(`authorization_token`). `#[serde(rename = "authorizationToken")]` maps the JSON
+key to the Rust field, so the wire format and our code each stay idiomatic.
+
+### Returning a tuple
+`poll_authentication` returns `(PollAuthResponse, u16)`. A **tuple** is an
+anonymous, fixed-size group of values — great for a one-off "two things" return
+without defining a named struct. Destructure with `let (body, status) = ...`.
+
+### `match` on status codes (exhaustive, with `_`)
+```rust
+match status {
+    200 => { ... }
+    304 => { ... }
+    _   => Err(...),   // catch-all; required because integers have many values
+}
+```
+`match` must cover every possibility; `_` is the wildcard arm. The compiler
+won't let you forget a case (for an enum it would name the missing variants).
+
+### String parsing as `Option`, not sentinels
+`text.strip_prefix("code=")` returns `Option<&str>` — `Some(rest)` if the prefix
+matched, `None` otherwise. We chain:
+```rust
+text.strip_prefix("code=")          // Option<&str>
+    .map(|c| c.to_string())          // Option<String> — transform the Some, leave None
+    .ok_or_else(|| SigningError::...) // Option<T> -> Result<T, E>: Some->Ok, None->Err
+```
+`ok_or_else` takes a closure that builds the error only when needed (vs `ok_or`
+which eagerly builds it). This "convert absence into a typed error" pattern is
+everywhere in Rust.
+
+### `unwrap_or_else` for fallback values
+`response.text().await.unwrap_or_else(|_| "Unknown error".to_string())` — if
+reading the body errors, substitute a default instead of propagating. Use this
+when you genuinely want a fallback, not a `?` early return.
+
+### Inline format args
+`format!("Push authorization failed: {status} - {body}")` — recent Rust lets you
+name variables directly inside `{}` instead of positional `{}` + trailing args.
