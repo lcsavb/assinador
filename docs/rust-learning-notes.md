@@ -462,3 +462,70 @@ The `assinador` library crate is done: config, errors, PKCE, the low-level
 `VidaasClient`, the `DocumentSigningPort` trait + adapter + dispatcher, and the
 `VidaasSigner` facade — **18 tests, all green, zero clippy warnings.** Next:
 Part 2 wraps this in an axum HTTP microservice.
+
+---
+
+## Task 10 — Server scaffold (axum app, state, error mapping, /health)
+
+### Binary vs library crate (and why we have both)
+A binary crate has `fn main()` and runs; a library crate is imported by others.
+**Integration tests in `tests/` compile as separate crates that can only import a
+crate's _library_, not its binary.** So `assinador-server` declares both targets
+in `Cargo.toml`:
+```toml
+[lib]
+name = "assinador_server"   # note: underscores — crate names can't have dashes
+path = "src/lib.rs"
+[[bin]]
+name = "assinador-server"
+path = "src/main.rs"
+```
+`main.rs` stays a thin shell (read env → build state → serve); all real logic
+lives in the lib so tests can reach it via `use assinador_server::app::...`.
+
+### Shared state with `#[derive(Clone)]`
+```rust
+#[derive(Clone)]
+pub struct AppState { signer: Arc<VidaasSigner>, api_token: Option<String> }
+```
+axum hands each request a clone of the state, so it must be `Clone`. Cloning is
+cheap: `Arc::clone` bumps a counter, `Option<String>` clones a short string. The
+expensive `VidaasSigner` is shared, never duplicated.
+
+### The router and handler references
+```rust
+Router::new()
+    .route("/health", get(|| async { "ok" }))           // inline async closure
+    .route("/v1/auth/start", post(crate::handlers::auth_start))
+    .with_state(state)
+```
+`get`/`post` wrap a handler for that method. The `/health` handler is an inline
+`async` closure returning `&str` (axum turns it into a `200 text/plain`). Others
+reference named `async fn`s. `.with_state(state)` makes `AppState` injectable.
+
+### `IntoResponse` — making our error a response
+A handler's return type must convert into an HTTP response. We implement
+`IntoResponse` for `ApiError`:
+```rust
+impl IntoResponse for ApiError {
+    fn into_response(self) -> Response {
+        (self.status, Json(json!({ "error": self.code, "detail": self.detail }))).into_response()
+    }
+}
+```
+A `(StatusCode, Json<...>)` tuple already implements `IntoResponse`, so we build
+that and delegate. Now any handler can return `Result<T, ApiError>` and an `Err`
+becomes a JSON body + status automatically.
+
+### Mapping library errors at the boundary
+`ApiError::from_signing` / `from_document` `match` each library error variant to a
+`(StatusCode, code)` pair. This is the **anti-corruption layer**: the crate speaks
+pt-BR domain errors; the HTTP edge translates them to status codes + machine
+codes. `impl Into<String>` in `bad_request` accepts both `&str` and `String` (the
+`Into` trait is the generic "convertible to" bound).
+
+### Spawning a server inside a test
+The integration test binds `127.0.0.1:0` (port 0 = "OS, pick a free port"),
+reads the chosen port from `local_addr()`, `tokio::spawn`s the server as a
+background task, and hits it with a real `reqwest` client. Fully real HTTP,
+self-contained, parallel-safe (every test gets its own port).
