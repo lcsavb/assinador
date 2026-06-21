@@ -462,3 +462,144 @@ The `assinador` library crate is done: config, errors, PKCE, the low-level
 `VidaasClient`, the `DocumentSigningPort` trait + adapter + dispatcher, and the
 `VidaasSigner` facade — **18 tests, all green, zero clippy warnings.** Next:
 Part 2 wraps this in an axum HTTP microservice.
+
+---
+
+## Task 10 — Server scaffold (axum app, state, error mapping, /health)
+
+### Binary vs library crate (and why we have both)
+A binary crate has `fn main()` and runs; a library crate is imported by others.
+**Integration tests in `tests/` compile as separate crates that can only import a
+crate's _library_, not its binary.** So `assinador-server` declares both targets
+in `Cargo.toml`:
+```toml
+[lib]
+name = "assinador_server"   # note: underscores — crate names can't have dashes
+path = "src/lib.rs"
+[[bin]]
+name = "assinador-server"
+path = "src/main.rs"
+```
+`main.rs` stays a thin shell (read env → build state → serve); all real logic
+lives in the lib so tests can reach it via `use assinador_server::app::...`.
+
+### Shared state with `#[derive(Clone)]`
+```rust
+#[derive(Clone)]
+pub struct AppState { signer: Arc<VidaasSigner>, api_token: Option<String> }
+```
+axum hands each request a clone of the state, so it must be `Clone`. Cloning is
+cheap: `Arc::clone` bumps a counter, `Option<String>` clones a short string. The
+expensive `VidaasSigner` is shared, never duplicated.
+
+### The router and handler references
+```rust
+Router::new()
+    .route("/health", get(|| async { "ok" }))           // inline async closure
+    .route("/v1/auth/start", post(crate::handlers::auth_start))
+    .with_state(state)
+```
+`get`/`post` wrap a handler for that method. The `/health` handler is an inline
+`async` closure returning `&str` (axum turns it into a `200 text/plain`). Others
+reference named `async fn`s. `.with_state(state)` makes `AppState` injectable.
+
+### `IntoResponse` — making our error a response
+A handler's return type must convert into an HTTP response. We implement
+`IntoResponse` for `ApiError`:
+```rust
+impl IntoResponse for ApiError {
+    fn into_response(self) -> Response {
+        (self.status, Json(json!({ "error": self.code, "detail": self.detail }))).into_response()
+    }
+}
+```
+A `(StatusCode, Json<...>)` tuple already implements `IntoResponse`, so we build
+that and delegate. Now any handler can return `Result<T, ApiError>` and an `Err`
+becomes a JSON body + status automatically.
+
+### Mapping library errors at the boundary
+`ApiError::from_signing` / `from_document` `match` each library error variant to a
+`(StatusCode, code)` pair. This is the **anti-corruption layer**: the crate speaks
+pt-BR domain errors; the HTTP edge translates them to status codes + machine
+codes. `impl Into<String>` in `bad_request` accepts both `&str` and `String` (the
+`Into` trait is the generic "convertible to" bound).
+
+### Spawning a server inside a test
+The integration test binds `127.0.0.1:0` (port 0 = "OS, pick a free port"),
+reads the chosen port from `local_addr()`, `tokio::spawn`s the server as a
+background task, and hits it with a real `reqwest` client. Fully real HTTP,
+self-contained, parallel-safe (every test gets its own port).
+
+---
+
+## Task 11 — Auth endpoints (start / poll / exchange) + sign
+
+### Boundary DTOs vs library types
+Each endpoint defines its own request/response structs (`StartRequest`,
+`StartResponse`, …). These are the **JSON wire contract**, deliberately separate
+from the library's `PushAuthorization`/`AccessToken`. The HTTP edge owns its
+format; if the library's internal types change, the wire contract needn't. We
+translate between them by hand in each handler (`auth.code` → `StartResponse.code`).
+
+### Destructuring extractors in the parameter list
+```rust
+async fn auth_start(
+    State(state): State<AppState>,   // pull AppState out of the State wrapper
+    Json(req): Json<StartRequest>,   // parse+destructure the JSON body
+) -> Result<Json<StartResponse>, ApiError>
+```
+`State(state)` and `Json(req)` are **patterns** in the parameter position — axum
+gives you `State<AppState>`, the pattern unwraps it to `state`. Ordering matters
+in axum: body-consuming extractors like `Json<T>` must come **last**. `Query(q):
+Query<PollQuery>` does the same for the `?code=...` query string.
+
+### Function-as-value error mapping
+`.map_err(ApiError::from_signing)` passes the function `from_signing` directly —
+no closure needed, because its signature `fn(SigningError) -> ApiError` is exactly
+what `map_err` wants. (Compare the `sign` handler, which needs a closure
+`|e| ApiError::bad_request(format!(...))` because it adds context.)
+
+### `match` producing a value, used inline
+```rust
+let status = match state.signer.poll(&q.code).await.map_err(...)? {
+    Approval::Approved => "approved",
+    Approval::Pending  => "pending",
+};
+```
+The whole `match` evaluates to the `&'static str` we store in `status`. We `?`
+the `Result` first (propagating errors as `ApiError`), then match the `Approval`.
+
+### Consuming iterator with `into_iter().map().collect()`
+In `sign`, `signed.into_iter().map(|s| SignDocOut { ... }).collect()` consumes the
+`Vec<SignedDocument>` and builds a `Vec<SignDocOut>`, base64-encoding bytes on the
+way out. `into_iter` (not `iter`) because we own `signed` and can move each `s`.
+The decode loop uses a plain `for d in req.documents` (also consuming) so it can
+move `d.id`/`d.alias` into `UnsignedDocument` and `?`-propagate a decode error as
+a 400 per document.
+
+---
+
+## Task 12 — /v1/sign integration test
+
+### Test both the happy path and the failure path
+- `sign_returns_base64_signed_pdf`: valid base64 PDF in → signed base64 PDF out,
+  decoded and checked for the `%PDF` header. Proves the whole edge: JSON decode →
+  base64 decode → library sign (mock VIDaaS) → base64 encode → JSON.
+- `sign_rejects_invalid_base64`: garbage base64 → HTTP **400**. Proves the error
+  branch produces the right status, not a 500 or a panic.
+
+A suite that only checks success tells you nothing about failure behavior —
+asserting the 400 is as important as asserting the signed bytes.
+
+### Navigating untyped JSON in tests
+`resp["signed"][0]["pdf_base64"].as_str().unwrap()` indexes a
+`serde_json::Value`. Indexing a `Value` with `[...]` returns another `Value`;
+`.as_str()` attempts to view it as a string (`Option<&str>`). Convenient for
+tests where defining a full response struct would be overkill — in production
+code you'd usually deserialize into a typed struct instead.
+
+### `cargo test` filtering: names, not files
+`cargo test -p assinador-server auth_flow` filters by **test function name**, so
+it matched nothing (the function is `start_poll_exchange_round_trip`). To run a
+whole integration-test file, use `--test auth_flow` (the file/target name). Bare
+`cargo test` runs everything across the workspace.

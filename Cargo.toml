@@ -1,7 +1,6 @@
 [workspace]
 resolver = "2"
-# Part 1 ships the library only. Part 2 adds "crates/assinador-server".
-members = ["crates/assinador"]
+members = ["crates/assinador", "crates/assinador-server"]
 
 [workspace.package]
 edition = "2021"
