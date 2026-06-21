@@ -576,3 +576,30 @@ way out. `into_iter` (not `iter`) because we own `signed` and can move each `s`.
 The decode loop uses a plain `for d in req.documents` (also consuming) so it can
 move `d.id`/`d.alias` into `UnsignedDocument` and `?`-propagate a decode error as
 a 400 per document.
+
+---
+
+## Task 12 — /v1/sign integration test
+
+### Test both the happy path and the failure path
+- `sign_returns_base64_signed_pdf`: valid base64 PDF in → signed base64 PDF out,
+  decoded and checked for the `%PDF` header. Proves the whole edge: JSON decode →
+  base64 decode → library sign (mock VIDaaS) → base64 encode → JSON.
+- `sign_rejects_invalid_base64`: garbage base64 → HTTP **400**. Proves the error
+  branch produces the right status, not a 500 or a panic.
+
+A suite that only checks success tells you nothing about failure behavior —
+asserting the 400 is as important as asserting the signed bytes.
+
+### Navigating untyped JSON in tests
+`resp["signed"][0]["pdf_base64"].as_str().unwrap()` indexes a
+`serde_json::Value`. Indexing a `Value` with `[...]` returns another `Value`;
+`.as_str()` attempts to view it as a string (`Option<&str>`). Convenient for
+tests where defining a full response struct would be overkill — in production
+code you'd usually deserialize into a typed struct instead.
+
+### `cargo test` filtering: names, not files
+`cargo test -p assinador-server auth_flow` filters by **test function name**, so
+it matched nothing (the function is `start_poll_exchange_round_trip`). To run a
+whole integration-test file, use `--test auth_flow` (the file/target name). Bare
+`cargo test` runs everything across the workspace.
