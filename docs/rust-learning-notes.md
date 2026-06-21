@@ -227,3 +227,51 @@ when you genuinely want a fallback, not a `?` early return.
 ### Inline format args
 `format!("Push authorization failed: {status} - {body}")` — recent Rust lets you
 name variables directly inside `{}` instead of positional `{}` + trailing args.
+
+---
+
+## Task 5 — Code exchange + batch signing
+
+### `Vec<T>` — growable heap array
+`Vec<DocumentForSignature>` is like Python's `list`/Java's `ArrayList`. Owned and
+heap-allocated. `.is_empty()`, `.len()`, indexing `vec[0]`. `vec![]` is the
+empty-vec macro.
+
+### serde attributes for shaping JSON
+- `#[serde(skip_serializing_if = "Option::is_none")]` on `pdf_signature_page`:
+  when serializing (sending), omit the field entirely if it's `None`. Keeps the
+  request body clean and matches what VIDaaS expects.
+- `#[serde(default)]` on `file_base64_signed`: when deserializing (receiving), if
+  the field is missing, fall back to the type's `Default` (empty `String`)
+  instead of failing the parse. Defensive against responses that omit it.
+
+### Guard clause + early `return`
+```rust
+if documents.is_empty() {
+    return Err(SigningError::ValidationError("...".to_string()));
+}
+```
+Validate inputs up front and bail with an explicit `return Err(...)`. Note: most
+Rust functions end with a *tail expression* (no `return`, no `;`), but an early
+exit in the middle needs the explicit `return` keyword.
+
+### `if/else` is an expression
+```rust
+if body.len() < 100 { body } else { "See logs for details".to_string() }
+```
+Rust's `if/else` *evaluates to a value*, so we use it inline as a `format!`
+argument. Both branches must produce the same type (`String` here). This replaces
+the ternary `?:` operator other languages have.
+
+### Ownership move into the request
+`let request = SignatureRequest { hashes: documents };` — `documents` is **moved**
+into the struct (not copied). After this line you can no longer use `documents`;
+ownership transferred. That's fine because we computed `doc_ids`/length checks
+*before* moving (in the adapter, Task 7) — order matters under move semantics.
+
+### Trait bounds surface in surprising places
+`.unwrap_err()` requires the `Ok` type to implement `Debug` (so it can print the
+unexpected value if it has to panic). That's why the empty-list test forced us to
+add `Debug` to `SignatureResponse`/`SignatureResult`. Lesson: a method can demand
+traits on a type parameter you didn't think about; the compiler tells you exactly
+which trait and where to add it.

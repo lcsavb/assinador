@@ -43,6 +43,37 @@ pub struct PollAuthResponse {
     pub redirect_url: Option<String>,
 }
 
+#[derive(Serialize)]
+struct SignatureRequest {
+    hashes: Vec<DocumentForSignature>,
+}
+
+#[derive(Serialize, Clone)]
+pub struct DocumentForSignature {
+    pub id: String,
+    pub alias: String,
+    pub hash: String,
+    pub hash_algorithm: String,
+    pub signature_format: String,
+    pub base64_content: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pdf_signature_page: Option<bool>,
+}
+
+#[derive(Deserialize, Clone, Debug)]
+pub struct SignatureResponse {
+    pub signatures: Vec<SignatureResult>,
+    pub certificate_alias: String,
+}
+
+#[derive(Deserialize, Clone, Debug)]
+pub struct SignatureResult {
+    pub id: String,
+    pub raw_signature: String,
+    #[serde(default)]
+    pub file_base64_signed: String,
+}
+
 impl VidaasClient {
     pub fn new(config: VidaasConfig) -> Self {
         Self { client: reqwest::Client::new(), config }
@@ -188,6 +219,85 @@ impl VidaasClient {
             ))),
         }
     }
+
+    /// Troca o `code` de autorização (push) + `verifier` PKCE pelo access token.
+    /// Retorna `(access_token, expires_in_segundos)`.
+    pub async fn exchange_code(
+        &self,
+        code: &str,
+        verifier: &str,
+    ) -> Result<(String, u32), SigningError> {
+        let response = self
+            .client
+            .post(format!("{}/v0/oauth/token", self.config.base_url))
+            .form(&[
+                ("grant_type", "authorization_code"),
+                ("code", code),
+                ("code_verifier", verifier),
+                ("client_id", &self.config.client_id),
+                ("client_secret", &self.config.client_secret),
+            ])
+            .send()
+            .await
+            .map_err(|e| {
+                tracing::warn!(error = %e, "VIDAAS token exchange request failed");
+                SigningError::NetworkError
+            })?;
+
+        if !response.status().is_success() {
+            return Err(SigningError::BadRequest(format!(
+                "Token exchange failed: {}",
+                response.status()
+            )));
+        }
+        let token: TokenResponse = response
+            .json()
+            .await
+            .map_err(|_| SigningError::BadRequest("Invalid token response format".to_string()))?;
+        Ok((token.access_token, token.expires_in))
+    }
+
+    /// Assina um lote de documentos. O `user_token` deve ter sido obtido pelo
+    /// fluxo OAuth (exchange). VIDaaS aceita múltiplos itens em `hashes`.
+    pub async fn sign_documents(
+        &self,
+        user_token: &str,
+        documents: Vec<DocumentForSignature>,
+    ) -> Result<SignatureResponse, SigningError> {
+        if documents.is_empty() {
+            return Err(SigningError::ValidationError(
+                "Cannot sign empty document list".to_string(),
+            ));
+        }
+
+        let request = SignatureRequest { hashes: documents };
+        let response = self
+            .client
+            .post(format!("{}/v0/oauth/signatures", self.config.base_url))
+            .bearer_auth(user_token)
+            .json(&request)
+            .send()
+            .await
+            .map_err(|e| {
+                tracing::warn!(error = %e, "VIDAAS signature request failed");
+                SigningError::NetworkError
+            })?;
+
+        let status = response.status();
+        if !status.is_success() {
+            let body = response.text().await.unwrap_or_else(|_| "Unable to read error response".to_string());
+            return Err(SigningError::BadRequest(format!(
+                "Document signature failed: {} (Status: {})",
+                if body.len() < 100 { body } else { "See logs for details".to_string() },
+                status.as_u16()
+            )));
+        }
+
+        response.json().await.map_err(|e| {
+            tracing::warn!(error = %e, "VIDAAS signature response parse failed");
+            SigningError::BadRequest("Invalid signature response format".to_string())
+        })
+    }
 }
 
 #[cfg(test)]
@@ -275,5 +385,54 @@ mod tests {
         let (body, status) = client.poll_authentication("abc-123").await.unwrap();
         assert_eq!(status, 200);
         assert_eq!(body.authorization_token.as_deref(), Some("tok"));
+    }
+
+    #[tokio::test]
+    async fn exchange_code_returns_access_token() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/v0/oauth/token"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "access_token": "at", "token_type": "Bearer", "expires_in": 604800
+            })))
+            .mount(&server)
+            .await;
+
+        let client = VidaasClient::new(config_for(&server));
+        let (token, expires) = client.exchange_code("code", "verifier").await.unwrap();
+        assert_eq!(token, "at");
+        assert_eq!(expires, 604800);
+    }
+
+    #[tokio::test]
+    async fn sign_documents_rejects_empty_list() {
+        let server = MockServer::start().await;
+        let client = VidaasClient::new(config_for(&server));
+        let err = client.sign_documents("at", vec![]).await.unwrap_err();
+        assert!(matches!(err, SigningError::ValidationError(_)));
+    }
+
+    #[tokio::test]
+    async fn sign_documents_parses_signatures() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/v0/oauth/signatures"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "signatures": [{ "id": "d1", "raw_signature": "r", "file_base64_signed": "JVBERi0=" }],
+                "certificate_alias": "alias"
+            })))
+            .mount(&server)
+            .await;
+
+        let client = VidaasClient::new(config_for(&server));
+        let doc = DocumentForSignature {
+            id: "d1".into(), alias: "a".into(), hash: "h".into(),
+            hash_algorithm: "2.16.840.1.101.3.4.2.1".into(),
+            signature_format: "PAdES_AD_RB".into(),
+            base64_content: "JVBERi0=".into(), pdf_signature_page: Some(false),
+        };
+        let resp = client.sign_documents("at", vec![doc]).await.unwrap();
+        assert_eq!(resp.signatures.len(), 1);
+        assert_eq!(resp.signatures[0].id, "d1");
     }
 }
