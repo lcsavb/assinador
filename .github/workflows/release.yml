@@ -1,0 +1,53 @@
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write   # criar o GitHub Release e anexar o binário
+  packages: write   # publicar a imagem no ghcr.io
+
+jobs:
+  # Binário estático Linux (x86_64 musl) anexado ao Release da tag.
+  binary:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Instalar target musl
+        run: |
+          rustup target add x86_64-unknown-linux-musl
+          sudo apt-get update && sudo apt-get install -y musl-tools
+      - uses: Swatinem/rust-cache@v2
+      - name: Compilar binário estático
+        run: cargo build --release -p assinador-server --target x86_64-unknown-linux-musl
+      - name: Empacotar
+        run: |
+          tar -C target/x86_64-unknown-linux-musl/release \
+            -czf assinador-server-${{ github.ref_name }}-x86_64-linux-musl.tar.gz \
+            assinador-server
+      - name: Publicar no Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: assinador-server-*-x86_64-linux-musl.tar.gz
+
+  # Imagem Docker publicada no GitHub Container Registry.
+  docker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - name: Login no ghcr.io
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build e push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: |
+            ghcr.io/lcsavb/assinador:${{ github.ref_name }}
+            ghcr.io/lcsavb/assinador:latest

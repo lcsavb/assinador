@@ -27,13 +27,33 @@ curl -X POST https://hml-certificado.vidaas.com.br/v0/oauth/application \
 
 ### 2. Suba o servidor
 
+Escolha **uma** das opções (todas sobem em `http://localhost:8080`):
+
+**a) Docker (recomendado — não precisa de Rust):**
+
+```bash
+docker run --rm -p 8080:8080 \
+  -e VIDAAS_CLIENT_ID=...  -e VIDAAS_CLIENT_SECRET=... \
+  -e VIDAAS_BASE_URL=https://hml-certificado.vidaas.com.br \
+  ghcr.io/lcsavb/assinador:latest
+```
+
+**b) Binário pronto (Linux x86_64, estático):** baixe o `.tar.gz` em
+[Releases](https://github.com/lcsavb/assinador/releases), e rode:
+
+```bash
+tar xzf assinador-server-*-x86_64-linux-musl.tar.gz
+VIDAAS_CLIENT_ID=... VIDAAS_CLIENT_SECRET=... ./assinador-server
+```
+
+**c) Compilando do código (precisa do Rust):**
+
 ```bash
 export VIDAAS_CLIENT_ID=...        # do passo 1
 export VIDAAS_CLIENT_SECRET=...    # do passo 1
 # homologação (opcional; sem isso, usa produção):
 export VIDAAS_BASE_URL=https://hml-certificado.vidaas.com.br
-
-cargo run -p assinador-server      # sobe em http://localhost:8080
+cargo run -p assinador-server
 ```
 
 ### 3. Rode o script Python para assinar
