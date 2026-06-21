@@ -4,6 +4,11 @@ version = "0.1.0"
 edition.workspace = true
 license.workspace = true
 description = "Assinatura digital de PDFs via VIDaaS (ICP-Brasil)."
+repository = "https://github.com/lcsavb/assinador"
+documentation = "https://docs.rs/assinador"
+readme = "README.md"
+keywords = ["vidaas", "icp-brasil", "pdf", "signature", "pades"]
+categories = ["api-bindings", "cryptography"]
 
 [dependencies]
 serde.workspace = true
