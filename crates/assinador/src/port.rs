@@ -5,6 +5,7 @@
 use async_trait::async_trait;
 
 /// Documento a ser assinado.
+#[derive(Debug, Clone)]
 pub struct UnsignedDocument {
     pub id: String,
     pub alias: String,
@@ -12,6 +13,7 @@ pub struct UnsignedDocument {
 }
 
 /// Resultado assinado.
+#[derive(Debug, Clone)]
 pub struct SignedDocument {
     pub id: String,
     pub signed_pdf_bytes: Vec<u8>,

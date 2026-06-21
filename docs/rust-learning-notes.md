@@ -323,3 +323,58 @@ the type counts as a "real error."
 string reference lives for the entire program (it's a string literal baked into
 the binary, like `"VIDaaS"`). Returning `&'static str` avoids allocating a
 `String` for a constant. First taste of explicit lifetimes.
+
+---
+
+## Task 7 — VIDaaS signing adapter
+
+### `Arc<T>` — shared ownership across threads
+**A**tomically **R**eference-**C**ounted pointer. Lets multiple owners share one
+heap value; the value is dropped when the last `Arc` goes away. The adapter holds
+`Arc<VidaasClient>`, and the signer (Task 9) will hold another `Arc` to the *same*
+client. `arc.clone()` is cheap — it bumps an atomic counter, it does NOT copy the
+client. Contrast `Rc<T>` (single-thread, non-atomic, faster) — we need `Arc`
+because async tasks cross threads.
+
+### Implementing the trait
+```rust
+#[async_trait]
+impl DocumentSigningPort for VidaasSigningAdapter { ... }
+```
+This is where we fulfill the contract from Task 6. The `impl Trait for Type`
+syntax is how a type "becomes a" `DocumentSigningPort`. Both the trait and this
+impl carry `#[async_trait]`.
+
+### Associated functions vs methods
+`Self::prepare_document(doc)` has no `self` parameter — it's an **associated
+function** (like a static method), called on the type. `self.client.sign_documents(...)`
+is a **method** (takes `&self`). `documents.iter().map(Self::prepare_document)`
+passes the associated function as a value — functions are first-class.
+
+### `.iter()` vs `.into_iter()`
+`documents.iter()` yields `&UnsignedDocument` (borrows; the `Vec` stays usable
+afterward). We borrow here because we still need `documents` later (for `.len()`).
+`.into_iter()` would consume and yield owned values. Choosing borrow-vs-consume is
+a constant Rust decision driven by what you need afterward.
+
+### Slice indexing + byte-literal comparison
+`signed_bytes.len() < 4 || &signed_bytes[0..4] != b"%PDF"` validates the PDF
+magic number. `&signed_bytes[0..4]` is a sub-slice (the first 4 bytes); `b"%PDF"`
+is a 4-byte literal. The `len() < 4` check comes first because indexing `[0..4]`
+on a shorter slice would **panic** — short-circuit `||` guards against it.
+
+### `.find()` → `Option` → `.ok_or_else()`
+```rust
+response.signatures.iter()
+    .find(|s| &s.id == expected_id)   // Option<&SignatureResult>
+    .ok_or_else(|| DocumentSigningError::ProviderError(...))?  // -> Result, then ?
+```
+We match signatures back to inputs **by id** rather than trusting array order —
+defensive against a provider reordering the batch. `Vec::with_capacity(n)`
+pre-allocates so the push loop never reallocates.
+
+### The `Debug` lesson, again
+`.unwrap_err()` in the test forced `SignedDocument: Debug` (hence `Vec<SignedDocument>:
+Debug`). The compiler printed the exact `#[derive(Debug)]` to add and where. Same
+pattern as Task 5 — internalize it: **test ergonomics (`unwrap`, `assert_eq`)
+often dictate which derives your types need.**
