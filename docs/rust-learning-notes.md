@@ -275,3 +275,51 @@ unexpected value if it has to panic). That's why the empty-list test forced us t
 add `Debug` to `SignatureResponse`/`SignatureResult`. Lesson: a method can demand
 traits on a type parameter you didn't think about; the compiler tells you exactly
 which trait and where to add it.
+
+---
+
+## Task 6 — The signing port (trait + DTOs)
+
+### A `trait` is an interface
+A trait declares methods a type promises to provide. It's Rust's polymorphism
+mechanism — **no class inheritance**. Any type can implement any trait. Here
+`DocumentSigningPort` defines `sign_documents` + `provider_name`; `VidaasSigner`
+(Task 9) will implement it, and a hypothetical SafeWeb signer could implement the
+same trait so callers swap providers without code changes.
+
+### Supertraits: `: Send + Sync`
+`pub trait DocumentSigningPort: Send + Sync` means "every implementor must also be
+`Send` and `Sync`."
+- `Send` = safe to **move** to another thread.
+- `Sync` = safe to **share** (`&T`) across threads.
+These are *auto traits* the compiler derives automatically when all fields
+qualify. We require them because the async runtime (tokio) schedules tasks across
+a thread pool, so a trait object used in async code must be thread-safe.
+
+### `#[async_trait]`
+Plain Rust traits have limited support for `async fn` methods, so the
+`async-trait` crate rewrites an async trait method into one returning a boxed
+future (`Pin<Box<dyn Future>>`). You annotate both the trait and every `impl`
+with `#[async_trait]`. Slight allocation cost, but it's the standard pattern for
+async traits today.
+
+### Manual `Display` vs derived
+`SigningError` got `Display` for free via `thiserror`'s `#[error("...")]`. Here we
+hand-write it to see the machinery:
+```rust
+impl std::fmt::Display for DocumentSigningError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self { Self::ProviderError(msg) => write!(f, "...: {msg}"), ... }
+    }
+}
+```
+`write!(f, ...)` writes into the provided formatter buffer (not stdout). `Display`
+is what `.to_string()` and `{}` use. `impl std::error::Error for ... {}` — an
+empty impl; the trait's methods all have defaults, we just opt into the marker so
+the type counts as a "real error."
+
+### `&'static str` return
+`fn provider_name(&self) -> &'static str` — `'static` is a **lifetime**: this
+string reference lives for the entire program (it's a string literal baked into
+the binary, like `"VIDaaS"`). Returning `&'static str` avoids allocating a
+`String` for a constant. First taste of explicit lifetimes.
