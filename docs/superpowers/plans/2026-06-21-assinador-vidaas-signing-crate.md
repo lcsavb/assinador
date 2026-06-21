@@ -24,7 +24,7 @@ Each part ends with a green test suite and is reviewable on its own.
 - The `DocumentSigningPort` trait is **retained** (multi-provider headroom).
 - **No** PDF metadata injection in the crate. **No** token persistence/encryption. **No** database. **No** FFI.
 - VIDaaS signing constants are fixed: hash algorithm OID `2.16.840.1.101.3.4.2.1` (SHA-256), `signature_format = "PAdES_AD_RB"`, `pdf_signature_page = Some(false)`.
-- The VIDaaS `exchange` call uses the **original push authorization `code` + PKCE `verifier`** (NOT the `authorizationToken` returned by polling). Polling's `authorizationToken`/`redirectUrl` are an approval *signal* only.
+- The VIDaaS `exchange` call uses the **`authorization_token` returned by polling** + the PKCE `verifier` (NOT the original push `code`, which is used only to poll). **[CORRECTED 2026-06-21 by a live test against production VIDaaS — the original plan guessed the push code and got `invalid_grant`. See `docs/rust-learning-notes.md` Task 14.]**
 - Default VIDaaS base URL: `https://certificado.vidaas.com.br`.
 - All `VidaasClient` methods take `&self` (client token is fetched inline per call, not cached) so the client is `Clone + Send + Sync` behind `Arc`.
 - Co-author trailer on every commit: `Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>`

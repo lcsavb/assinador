@@ -442,12 +442,12 @@ The signer *is-a* `DocumentSigningPort` (so it slots into the dispatcher and any
 trait-based caller), but the actual work lives in the adapter. Thin forwarding
 wrappers like this are idiomatic and keep responsibilities separated.
 
-### The faithful exchange (the sanity-check point)
-`exchange(code, verifier)` passes the **original push `code`** — not the
-`authorizationToken` from polling. The `full_flow_begin_poll_exchange` test wires
-all four mocked endpoints and proves the orchestration end-to-end: begin → poll
-(approved) → exchange → token. This is the whole crate working together with zero
-real network.
+### The exchange code (corrected by a live test — see Task 14)
+`exchange(authorization_token, verifier)` passes the **`authorization_token`
+returned by polling** — NOT the original push `code`. The push `code` is only
+for polling. The `full_flow_begin_poll_exchange` test wires all four mocked
+endpoints and proves the orchestration end-to-end. (The design originally guessed
+the push code was exchanged; the live smoke test proved otherwise — see Task 14.)
 
 ### `matches!` as a boolean assertion
 `assert!(matches!(signer.poll(..).await.unwrap(), Approval::Pending))` — checks
@@ -603,3 +603,48 @@ code you'd usually deserialize into a typed struct instead.
 it matched nothing (the function is `start_poll_exchange_round_trip`). To run a
 whole integration-test file, use `--test auth_flow` (the file/target name). Bare
 `cargo test` runs everything across the workspace.
+
+---
+
+## Task 14 — Live smoke test (and a real bug it caught)
+
+We ran a live signature from Python against production VIDaaS through the
+running microservice. It worked end-to-end — but only after a bug that **no unit
+test could have caught**, because every test mocked VIDaaS and we'd mocked it
+according to our (wrong) assumption.
+
+### The bug: which code do you exchange?
+The VIDaaS push flow has TWO code-like values:
+- `code` (X) — returned by `/authorize`; used only to **poll** for approval.
+- `authorization_token` (Y) — returned by polling once approved.
+
+We exchanged **X** and got `{"error":"invalid_grant"}`. The correct value is
+**Y**. The spec had flagged this as an ambiguity and guessed X (because rx's
+service method is *named* `exchange_and_store(authorization_code, ...)`), but
+reading rx's UI layer showed the working call passes `resp.authorization_token`
+(Y) into that misleadingly-named parameter.
+
+### Lessons
+1. **Mocks encode your assumptions.** A green mock-based suite proves the code
+   does what you *think* the API does — not what it *actually* does. Live/contract
+   tests are the only thing that validates the assumption itself.
+2. **Surface error bodies at the boundary.** Our first failure said only
+   "400 Bad Request". We were blind until we changed `exchange_code` to include
+   VIDaaS's response body (`invalid_grant`) and the Python client to print the
+   server's JSON `detail`. *Capture the upstream error body* — it's the difference
+   between minutes and hours of debugging.
+3. **Read the working caller, not just the named API.** The function signature
+   said `authorization_code`; the truth was in *who called it and with what*.
+4. **`enum` variants can carry data.** The fix changed `Approval::Approved` to
+   `Approval::Approved { authorization_token: String }`, so the approval result
+   carries the token forward — a clean, type-safe way to thread the value from
+   poll into exchange. Pattern: `if let Approval::Approved { authorization_token }
+   = ... { break authorization_token; }` (a `loop` that breaks *with a value*).
+
+---
+
+## Done — both parts, verified live
+
+Library + microservice complete, 22 tests green, and a **real ICP-Brasil
+signature** produced against production VIDaaS (`/Type /Sig`, `/SubFilter
+/PBAD.PAdES`). The one bug that mocks hid was caught and fixed by the live run.

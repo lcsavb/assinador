@@ -220,8 +220,9 @@ impl VidaasClient {
         }
     }
 
-    /// Troca o `code` de autorização (push) + `verifier` PKCE pelo access token.
-    /// Retorna `(access_token, expires_in_segundos)`.
+    /// Troca o `authorization_token` (retornado no poll após aprovação) +
+    /// `verifier` PKCE pelo access token. Atenção: NÃO é o `code` do push — esse
+    /// serve só para consultar a aprovação. Retorna `(access_token, expires_in)`.
     pub async fn exchange_code(
         &self,
         code: &str,
@@ -245,9 +246,14 @@ impl VidaasClient {
             })?;
 
         if !response.status().is_success() {
+            let status = response.status();
+            let body = response
+                .text()
+                .await
+                .unwrap_or_else(|_| "Unable to read error response".to_string());
+            tracing::warn!(status = %status, body = %body, "VIDAAS token exchange returned error");
             return Err(SigningError::BadRequest(format!(
-                "Token exchange failed: {}",
-                response.status()
+                "Token exchange failed: {status} - {body}"
             )));
         }
         let token: TokenResponse = response

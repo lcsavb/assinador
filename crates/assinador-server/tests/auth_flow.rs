@@ -51,9 +51,10 @@ async fn start_poll_exchange_round_trip() {
     let poll: serde_json::Value = http.get(format!("{base}/v1/auth/poll?code=push-code"))
         .send().await.unwrap().json().await.unwrap();
     assert_eq!(poll["status"], "approved");
+    assert_eq!(poll["authorization_token"], "tok");
 
     let exchange: serde_json::Value = http.post(format!("{base}/v1/auth/exchange"))
-        .json(&serde_json::json!({ "code": "push-code", "verifier": verifier }))
+        .json(&serde_json::json!({ "authorization_token": "tok", "verifier": verifier }))
         .send().await.unwrap().json().await.unwrap();
     assert_eq!(exchange["access_token"], "final");
     assert_eq!(exchange["expires_in"], 604800);

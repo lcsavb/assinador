@@ -20,10 +20,11 @@ pub struct PushAuthorization {
     pub verifier: String,
 }
 
-/// Estado da aprovação push.
+/// Estado da aprovação push. Quando aprovado, carrega o `authorization_token`
+/// que deve ser trocado pelo access token (NÃO o `code` original do push).
 pub enum Approval {
     Pending,
-    Approved,
+    Approved { authorization_token: String },
 }
 
 /// Token de acesso obtido no exchange (validade em segundos).
@@ -56,19 +57,26 @@ impl VidaasSigner {
         Ok(PushAuthorization { code, verifier })
     }
 
-    /// Passo 2 — consulta a aprovação. `Approved` quando o usuário confirma.
+    /// Passo 2 — consulta a aprovação. `Approved` (com o `authorization_token`)
+    /// quando o usuário confirma no celular.
     pub async fn poll(&self, code: &str) -> Result<Approval, SigningError> {
         let (body, status) = self.client.poll_authentication(code).await?;
-        if status == 200 && body.authorization_token.is_some() {
-            Ok(Approval::Approved)
-        } else {
-            Ok(Approval::Pending)
+        match body.authorization_token {
+            Some(token) if status == 200 => {
+                Ok(Approval::Approved { authorization_token: token })
+            }
+            _ => Ok(Approval::Pending),
         }
     }
 
-    /// Passo 3 — troca o `code` (push) + `verifier` pelo access token.
-    pub async fn exchange(&self, code: &str, verifier: &str) -> Result<AccessToken, SigningError> {
-        let (value, expires_in) = self.client.exchange_code(code, verifier).await?;
+    /// Passo 3 — troca o `authorization_token` (retornado no poll) + `verifier`
+    /// pelo access token. Atenção: é o token do poll, não o `code` do push.
+    pub async fn exchange(
+        &self,
+        authorization_token: &str,
+        verifier: &str,
+    ) -> Result<AccessToken, SigningError> {
+        let (value, expires_in) = self.client.exchange_code(authorization_token, verifier).await?;
         Ok(AccessToken { value, expires_in })
     }
 }
@@ -141,8 +149,13 @@ mod tests {
         let signer = signer_for(&server);
         let auth = signer.begin_authorization("12345678900").await.unwrap();
         assert_eq!(auth.code, "push-code");
-        assert!(matches!(signer.poll(&auth.code).await.unwrap(), Approval::Approved));
-        let token = signer.exchange(&auth.code, &auth.verifier).await.unwrap();
+        let authorization_token = match signer.poll(&auth.code).await.unwrap() {
+            Approval::Approved { authorization_token } => authorization_token,
+            Approval::Pending => panic!("expected approval"),
+        };
+        assert_eq!(authorization_token, "tok");
+        // The exchange uses the poll's authorization_token, NOT the push code.
+        let token = signer.exchange(&authorization_token, &auth.verifier).await.unwrap();
         assert_eq!(token.value, "final");
         assert_eq!(token.expires_in, 604800);
     }

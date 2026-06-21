@@ -38,22 +38,29 @@ pub struct PollQuery {
 #[derive(Serialize)]
 pub struct PollResponse {
     pub status: &'static str,
+    /// Presente apenas quando `status == "approved"`. Deve ser enviado ao
+    /// `/v1/auth/exchange`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub authorization_token: Option<String>,
 }
 
 pub async fn auth_poll(
     State(state): State<AppState>,
     Query(q): Query<PollQuery>,
 ) -> Result<Json<PollResponse>, ApiError> {
-    let status = match state.signer.poll(&q.code).await.map_err(ApiError::from_signing)? {
-        Approval::Approved => "approved",
-        Approval::Pending => "pending",
+    let resp = match state.signer.poll(&q.code).await.map_err(ApiError::from_signing)? {
+        Approval::Approved { authorization_token } => PollResponse {
+            status: "approved",
+            authorization_token: Some(authorization_token),
+        },
+        Approval::Pending => PollResponse { status: "pending", authorization_token: None },
     };
-    Ok(Json(PollResponse { status }))
+    Ok(Json(resp))
 }
 
 #[derive(Deserialize)]
 pub struct ExchangeRequest {
-    pub code: String,
+    pub authorization_token: String,
     pub verifier: String,
 }
 #[derive(Serialize)]
@@ -68,7 +75,7 @@ pub async fn auth_exchange(
 ) -> Result<Json<ExchangeResponse>, ApiError> {
     let token = state
         .signer
-        .exchange(&req.code, &req.verifier)
+        .exchange(&req.authorization_token, &req.verifier)
         .await
         .map_err(ApiError::from_signing)?;
     Ok(Json(ExchangeResponse { access_token: token.value, expires_in: token.expires_in }))

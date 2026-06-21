@@ -9,13 +9,15 @@ Assinatura digital de PDFs via VIDaaS (ICP-Brasil), em dois alvos:
 ## Fluxo
 
 1. `POST /v1/auth/start` `{ "cpf": "..." }` → `{ "code", "verifier" }`
-2. `GET  /v1/auth/poll?code=...` → `{ "status": "pending" | "approved" }` (repita até `approved`)
-3. `POST /v1/auth/exchange` `{ "code", "verifier" }` → `{ "access_token", "expires_in" }`
+2. `GET  /v1/auth/poll?code=...` → `{ "status": "pending" }` ou, quando aprovado,
+   `{ "status": "approved", "authorization_token": "..." }` (repita até `approved`)
+3. `POST /v1/auth/exchange` `{ "authorization_token", "verifier" }` → `{ "access_token", "expires_in" }`
 4. `POST /v1/sign` `{ "access_token", "documents": [{ "id", "alias", "pdf_base64" }] }`
    → `{ "signed": [{ "id", "pdf_base64" }] }`
 
-> O `exchange` usa o **`code` original do push + `verifier`**, não o
-> `authorizationToken` retornado no poll.
+> O `exchange` usa o **`authorization_token` retornado no poll** + o `verifier` —
+> NÃO o `code` original do push (este serve apenas para consultar a aprovação).
+> Confirmado em teste real contra a VIDaaS de produção.
 
 ## Executar
 
@@ -34,11 +36,11 @@ curl -s localhost:8080/v1/auth/start -H 'content-type: application/json' \
 
 # 2. consultar até aprovar
 curl -s "localhost:8080/v1/auth/poll?code=<code>"
-# => {"status":"pending"}  ... depois  {"status":"approved"}
+# => {"status":"pending"}  ... depois  {"status":"approved","authorization_token":"<token>"}
 
-# 3. trocar pelo access token
+# 3. trocar pelo access token (usa o authorization_token do poll, não o <code>)
 curl -s localhost:8080/v1/auth/exchange -H 'content-type: application/json' \
-  -d '{"code":"<code>","verifier":"<verifier>"}'
+  -d '{"authorization_token":"<authorization_token>","verifier":"<verifier>"}'
 # => {"access_token":"<token>","expires_in":604800}
 
 # 4. assinar (pdf_base64 = base64 do PDF)

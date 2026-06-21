@@ -18,16 +18,17 @@ async fn assinar(pdf_bytes: Vec<u8>) -> Result<Vec<u8>, Box<dyn std::error::Erro
     // 1. dispara o push no celular do usuário
     let auth = signer.begin_authorization("12345678900").await?;
 
-    // 2. consulta até aprovar
-    loop {
-        if let Approval::Approved = signer.poll(&auth.code).await? {
-            break;
+    // 2. consulta até aprovar; a aprovação carrega o authorization_token
+    let authorization_token = loop {
+        if let Approval::Approved { authorization_token } = signer.poll(&auth.code).await? {
+            break authorization_token;
         }
         // aguarde (ex.: tokio::time::sleep) e tente de novo
-    }
+    };
 
-    // 3. troca pelo access token (guarde-o; vale ~7 dias)
-    let token = signer.exchange(&auth.code, &auth.verifier).await?;
+    // 3. troca o authorization_token (do poll) + verifier pelo access token
+    //    (guarde-o; vale ~7 dias). NÃO use auth.code aqui.
+    let token = signer.exchange(&authorization_token, &auth.verifier).await?;
 
     // 4. assina um ou mais PDFs
     let mut signed = signer
